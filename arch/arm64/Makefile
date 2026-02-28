@@ -428,7 +428,7 @@ define archhelp
   echo  '                  Install using (your) ~/bin/installkernel or'
   echo  '                  (distribution) /sbin/installkernel or'
   echo  '                  install to $$(INSTALL_PATH) and run lilo'
-endef#
+endef
 # arch/arm64/Makefile
 #
 # This file is included by the global makefile so that you can add your own
