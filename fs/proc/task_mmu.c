@@ -1879,7 +1879,6 @@ struct reclaim_param reclaim_task_anon(struct task_struct *task,
 		int nr_to_reclaim)
 {
 	struct mm_struct *mm;
-	struct vm_area_struct *vma;
 	struct mm_walk reclaim_walk = {};
 	struct reclaim_param rp = {
 		.nr_to_reclaim = nr_to_reclaim,
