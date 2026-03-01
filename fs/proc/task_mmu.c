@@ -1786,6 +1786,7 @@ static int reclaim_pte_range(pmd_t *pmd, unsigned long addr,
 {
 	struct reclaim_param *rp = walk->private;
 	struct vm_area_struct *vma = rp->vma;
+	(void)vma;  // 关键：添加这行消除未使用警告
 	pte_t *pte, ptent;
 	spinlock_t *ptl;
 	struct page *page;
