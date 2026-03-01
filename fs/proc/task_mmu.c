@@ -1517,52 +1517,75 @@ static int pagemap_pmd_range(pmd_t *pmdp, unsigned long addr, unsigned long end,
 	return err;
 }
 
-#ifdef CONFIG_HUGETLB_PAGE
-/* This function walks within one hugetlb entry in the single call */
-static int pagemap_hugetlb_range(pte_t *ptep, unsigned long hmask,
-				 unsigned long addr, unsigned long end,
-				 struct mm_walk *walk)
+static int reclaim_pte_range(pmd_t *pmd, unsigned long addr,
+				unsigned long end, struct mm_walk *walk)
 {
-	struct pagemapread *pm = walk->private;
-	struct vm_area_struct *vma = walk->vma;
-	u64 flags = 0, frame = 0;
-	int err = 0;
-	pte_t pte;
+	// 修复：所有变量声明移到函数开头（符合C90标准）
+	struct reclaim_param *rp = walk->private;
+	struct vm_area_struct *vma = rp->vma;
+	pte_t *pte = NULL, ptent;
+	spinlock_t *ptl = NULL;
+	struct page *page = NULL;
+	LIST_HEAD(page_list);
+	int isolated = 0;
+	int reclaimed = 0;
 
-	if (vma->vm_flags & VM_SOFTDIRTY)
-		flags |= PM_SOFT_DIRTY;
+	// 修复：如果vma未实际使用（比如split_huge_pmd是空宏），添加伪使用标记
+	(void)vma;
 
-	pte = huge_ptep_get(ptep);
-	if (pte_present(pte)) {
-		struct page *page = pte_page(pte);
+	// 原有代码逻辑（全部移到声明后）
+	split_huge_pmd(vma, addr, pmd);
+	if (pmd_trans_unstable(pmd) || !rp->nr_to_reclaim)
+		return 0;
+cont:
+	isolated = 0;
+	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
+	for (; addr != end; pte++, addr += PAGE_SIZE) {
+		ptent = *pte;
+		if (!pte_present(ptent))
+			continue;
 
-		if (!PageAnon(page))
-			flags |= PM_FILE;
+		page = vm_normal_page(vma, addr, ptent);
+		if (!page)
+			continue;
 
-		if (page_mapcount(page) == 1)
-			flags |= PM_MMAP_EXCLUSIVE;
+		if (isolate_lru_page(compound_head(page)))
+			continue;
 
-		flags |= PM_PRESENT;
-		if (pm->show_pfn)
-			frame = pte_pfn(pte) +
-				((addr & ~hmask) >> PAGE_SHIFT);
+		/* MADV_FREE clears pte dirty bit and then marks the page
+		 * lazyfree (clear SwapBacked). Inbetween if this lazyfreed page
+		 * is touched by user then it becomes dirty.  PPR in
+		 * shrink_page_list in try_to_unmap finds the page dirty, marks
+		 * it back as PageSwapBacked and skips reclaim. This can cause
+		 * isolated count mismatch.
+		 */
+		if (PageAnon(page) && !PageSwapBacked(page)) {
+			putback_lru_page(page);
+			continue;
+		}
+
+		list_add(&page->lru, &page_list);
+		inc_node_page_state(page, NR_ISOLATED_ANON +
+				page_is_file_cache(page));
+		isolated++;
+		rp->nr_scanned++;
+		if ((isolated >= SWAP_CLUSTER_MAX) || !rp->nr_to_reclaim)
+			break;
 	}
+	pte_unmap_unlock(pte - 1, ptl);
+	reclaimed = reclaim_pages_from_list(&page_list, vma);
+	rp->nr_reclaimed += reclaimed;
+	rp->nr_to_reclaim -= reclaimed;
+	if (rp->nr_to_reclaim < 0)
+		rp->nr_to_reclaim = 0;
 
-	for (; addr != end; addr += PAGE_SIZE) {
-		pagemap_entry_t pme = make_pme(frame, flags);
-
-		err = add_to_pagemap(addr, &pme, pm);
-		if (err)
-			return err;
-		if (pm->show_pfn && (flags & PM_PRESENT))
-			frame++;
-	}
+	if (rp->nr_to_reclaim && (addr != end))
+		goto cont;
 
 	cond_resched();
-
-	return err;
+	return 0;
 }
-#endif /* HUGETLB_PAGE */
+
 
 /*
  * /proc/pid/pagemap - an array mapping virtual pages to pfns
@@ -1784,21 +1807,25 @@ int reclaim_address_space(struct address_space *mapping,
 static int reclaim_pte_range(pmd_t *pmd, unsigned long addr,
 				unsigned long end, struct mm_walk *walk)
 {
+	// 第一步：所有变量声明移到函数开头（符合C90标准）
 	struct reclaim_param *rp = walk->private;
 	struct vm_area_struct *vma = rp->vma;
-	(void)vma;  // 关键：添加这行消除未使用警告
-	pte_t *pte, ptent;
-	spinlock_t *ptl;
-	struct page *page;
-	LIST_HEAD(page_list);
-	int isolated;
-	int reclaimed;
+	pte_t *pte, ptent;          // 提前声明pte/ptent
+	spinlock_t *ptl;            // 提前声明ptl
+	struct page *page;          // 提前声明page
+	LIST_HEAD(page_list);       // 提前声明page_list
+	int isolated = 0;           // 提前声明并初始化isolated
+	int reclaimed = 0;          // 提前声明并初始化reclaimed
 
+	// 第二步：修复未使用变量（保留vma的伪使用标记）
+	(void)vma;
+
+	// 第三步：原有代码逻辑（全部移到声明之后）
 	split_huge_pmd(vma, addr, pmd);
 	if (pmd_trans_unstable(pmd) || !rp->nr_to_reclaim)
 		return 0;
 cont:
-	isolated = 0;
+	isolated = 0;  // 这里改为赋值，而非声明
 	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
 	for (; addr != end; pte++, addr += PAGE_SIZE) {
 		ptent = *pte;
